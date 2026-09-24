@@ -1,0 +1,149 @@
+from dataclasses import dataclass
+from enum import Enum
+
+
+class TourType(Enum):
+    BEACH = "Пляжний"
+    EXCURSION = "Екскурсійний"
+    ADVENTURE = "Пригодницький"
+
+
+class BookingStatus(Enum):
+    PENDING = "Очікує"
+    CONFIRMED = "Підтверджено"
+    CANCELED = "Скасовано"
+
+
+@dataclass
+class Customer:
+    name: str
+    email: str
+    phone: str
+
+
+class Tour:
+    def __init__(self, title, price, duration, tour_type):
+        self._title = ""
+        self._price = 0
+        self._duration = 1
+        self.tour_type = tour_type
+
+        self.title = title
+        self.price = price
+        self.duration = duration
+
+    @property
+    def title(self):
+        return self._title
+
+    @title.setter
+    def title(self, value):
+        if len(value.strip()) < 3:
+            raise ValueError("Назва туру має містити мінімум 3 символи.")
+        self._title = value
+
+    @property
+    def price(self):
+        return self._price
+
+    @price.setter
+    def price(self, value):
+        if value < 0:
+            raise ValueError("Ціна туру не може бути від'ємною.")
+        self._price = value
+
+    @property
+    def duration(self):
+        return self._duration
+
+    @duration.setter
+    def duration(self, value):
+        if value <= 0:
+            raise ValueError("Тривалість має бути більше 0 днів.")
+        self._duration = value
+
+    def __str__(self):
+        return f"{self.title} | {self.tour_type.value} | {self.duration} днів | {self.price} грн"
+
+
+class Booking:
+    def __init__(self, customer, tour):
+        self.customer = customer
+        self.tour = tour
+        self.status = BookingStatus.PENDING
+
+    @property
+    def status(self):
+        return self._status
+
+    @status.setter
+    def status(self, value):
+        if not isinstance(value, BookingStatus):
+            raise ValueError("Некоректний статус бронювання.")
+        self._status = value
+
+    def __enter__(self):
+        print("\n--- Початок бронювання ---")
+        return self
+
+    def confirm(self):
+        self.status = BookingStatus.CONFIRMED
+        print("Бронювання підтверджено.")
+
+    def cancel(self):
+        self.status = BookingStatus.CANCELED
+        print("Бронювання скасовано.")
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        print(f"Фінальний статус: {self.status.value}")
+        print("--- Завершення бронювання ---")
+
+
+if __name__ == "__main__":
+    print("=== Система туристичного агентства ===")
+
+    try:
+        name = input("Ім'я клієнта: ")
+        email = input("Email: ")
+        phone = input("Телефон: ")
+
+        customer = Customer(name, email, phone)
+
+        print("\nТипи турів:")
+        print("1 - Пляжний")
+        print("2 - Екскурсійний")
+        print("3 - Пригодницький")
+
+        choice = input("Оберіть тип туру: ")
+
+        types = {
+            "1": TourType.BEACH,
+            "2": TourType.EXCURSION,
+            "3": TourType.ADVENTURE
+        }
+
+        if choice not in types:
+            raise ValueError("Некоректний тип туру.")
+
+        tour = Tour("Тест", 1, 1, types[choice])
+
+        tour.title = input("Назва туру: ")
+        tour.price = float(input("Ціна: "))
+        tour.duration = int(input("Тривалість (днів): "))
+
+        print("\nСтворений тур:")
+        print(tour)
+
+        with Booking(customer, tour) as booking:
+            answer = input("Підтвердити бронювання? (так/ні): ").lower()
+
+            if answer == "так":
+                booking.confirm()
+            else:
+                booking.cancel()
+
+        print("\nВнутрішній стан об'єкта Tour:")
+        print(vars(tour))
+
+    except ValueError as e:
+        print("\nПомилка:", e)
