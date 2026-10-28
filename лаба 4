@@ -1,0 +1,719 @@
+import csv
+import time
+from copy import copy
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from enum import Enum
+from functools import total_ordering
+
+STATS_FILE = "tour_statistics.csv"
+STATS_HEADER = ("Напрямок", "Запитів", "Підтверджено", "Дохід, грн")
+
+
+class TourType(Enum):
+    BEACH = "Пляжний"
+    EXCURSION = "Екскурсійний"
+    ADVENTURE = "Пригодницький"
+
+
+class BookingStatus(Enum):
+    PENDING = "Очікує"
+    CONFIRMED = "Підтверджено"
+    CANCELED = "Скасовано"
+    EXPIRED = "Прострочено"
+
+
+@dataclass
+class Customer:
+    name: str
+    email: str
+    phone: str
+
+
+@total_ordering
+class Tour:
+    def __init__(self, title, price, duration, tour_type, direction, start_date,
+                 seats=10, service_fee=0):
+        self._title = ""
+        self._price = 0
+        self._duration = 1
+        self._start_date = None
+        self._service_fee = 0
+        self._reserved = 0
+        self.tour_type = tour_type
+
+        if not direction.strip():
+            raise ValueError("Напрямок туру не може бути порожнім.")
+        if seats < 1:
+            raise ValueError("Кількість місць має бути не менше 1.")
+
+        self.title = title
+        self.price = price
+        self.duration = duration
+        self.direction = direction
+        self.start_date = start_date
+        self.seats = seats
+        self.service_fee = service_fee
+
+    @property
+    def title(self):
+        return self._title
+
+    @title.setter
+    def title(self, value):
+        if len(value.strip()) < 3:
+            raise ValueError("Назва туру має містити мінімум 3 символи.")
+        self._title = value
+
+    @property
+    def price(self):
+        return self._price
+
+    @price.setter
+    def price(self, value):
+        if value < 0:
+            raise ValueError("Ціна туру не може бути від'ємною.")
+        self._price = value
+
+    @property
+    def duration(self):
+        return self._duration
+
+    @duration.setter
+    def duration(self, value):
+        if value <= 0:
+            raise ValueError("Тривалість має бути більше 0 днів.")
+        self._duration = value
+
+    @property
+    def start_date(self):
+        return self._start_date
+
+    @start_date.setter
+    def start_date(self, value):
+        if value < date.today():
+            raise ValueError("Дата початку туру не може бути в минулому.")
+        self._start_date = value
+
+    @property
+    def service_fee(self):
+        return self._service_fee
+
+    @service_fee.setter
+    def service_fee(self, value):
+        if value < 0:
+            raise ValueError("Сервісний збір не може бути від'ємним.")
+        self._service_fee = value
+
+    @property
+    def free_seats(self):
+        return self.seats - self._reserved
+
+    @property
+    def is_available(self):
+        return self.start_date > date.today() and self.free_seats > 0
+
+    @property
+    def total_price(self):
+        return round(self.calculate_final_price() + self.service_fee, 2)
+
+    def calculate_final_price(self):
+        return self.price
+
+    def reserve(self):
+        if self.free_seats <= 0:
+            raise ValueError("Вільних місць на цей тур немає.")
+        self._reserved += 1
+
+    def release(self):
+        if self._reserved > 0:
+            self._reserved -= 1
+
+    def _specific_repr(self):
+        return ""
+
+    def __add__(self, other):
+        if isinstance(other, Tour):
+            return round(self.total_price + other.total_price, 2)
+        if isinstance(other, (int, float)):
+            result = copy(self)
+            result._reserved = 0
+            result.service_fee = self.service_fee + other
+            return result
+        return NotImplemented
+
+    def __eq__(self, other):
+        if not isinstance(other, Tour):
+            return NotImplemented
+        return self.total_price == other.total_price
+
+    def __lt__(self, other):
+        if not isinstance(other, Tour):
+            return NotImplemented
+        return self.total_price < other.total_price
+
+    def __str__(self):
+        return (f"{self.title} | {self.tour_type.value} | {self.direction} | "
+                f"{self.start_date:%d.%m.%Y} | {self.duration} днів | "
+                f"базова ціна {self.price:.2f} грн | "
+                f"до сплати {self.total_price:.2f} грн")
+
+    def __repr__(self):
+        return (f"{type(self).__name__}({self.title!r}, {self.price!r}, "
+                f"{self.duration!r}, {self._specific_repr()}"
+                f"{self.direction!r}, {self.start_date!r})")
+
+
+class BeachTour(Tour):
+    def __init__(self, title, price, duration, all_inclusive, direction, start_date,
+                 **options):
+        super().__init__(title, price, duration, TourType.BEACH, direction,
+                         start_date, **options)
+        self.all_inclusive = all_inclusive
+
+    def calculate_final_price(self):
+        return self.price * 1.25 if self.all_inclusive else self.price
+
+    def _specific_repr(self):
+        return f"{self.all_inclusive!r}, "
+
+
+class ExcursionTour(Tour):
+    EXCURSION_COST = 300
+
+    def __init__(self, title, price, duration, excursions, direction, start_date,
+                 **options):
+        super().__init__(title, price, duration, TourType.EXCURSION, direction,
+                         start_date, **options)
+        if excursions < 1:
+            raise ValueError("Екскурсійний тур має містити хоча б одну екскурсію.")
+        self.excursions = excursions
+
+    def calculate_final_price(self):
+        return self.price + self.excursions * self.EXCURSION_COST
+
+    def _specific_repr(self):
+        return f"{self.excursions!r}, "
+
+
+class AdventureTour(Tour):
+    def __init__(self, title, price, duration, difficulty, direction, start_date,
+                 **options):
+        super().__init__(title, price, duration, TourType.ADVENTURE, direction,
+                         start_date, **options)
+        if not 1 <= difficulty <= 5:
+            raise ValueError("Складність має бути від 1 до 5.")
+        self.difficulty = difficulty
+
+    def calculate_final_price(self):
+        return self.price * (1 + 0.1 * self.difficulty)
+
+    def _specific_repr(self):
+        return f"{self.difficulty!r}, "
+
+
+class Booking:
+    DEFAULT_TIMEOUT = 60
+
+    def __init__(self, customer, tour, timeout=DEFAULT_TIMEOUT):
+        self.customer = customer
+        self.tour = tour
+        self.timeout = timeout
+        self.status = BookingStatus.PENDING
+        self._started_at = None
+        self._holds_seat = False
+
+    @property
+    def status(self):
+        return self._status
+
+    @status.setter
+    def status(self, value):
+        if not isinstance(value, BookingStatus):
+            raise ValueError("Некоректний статус бронювання.")
+        self._status = value
+
+    def __enter__(self):
+        if not self.tour.is_available:
+            raise ValueError("Тур недоступний для бронювання.")
+        self.tour.reserve()
+        self._holds_seat = True
+        self._started_at = time.monotonic()
+        print(f"\n--- Початок бронювання (місце утримується {self.timeout} с) ---")
+        return self
+
+    def confirm(self):
+        if self.status is not BookingStatus.PENDING:
+            raise ValueError("Підтвердити можна лише бронювання, що очікує.")
+        self.status = BookingStatus.CONFIRMED
+        print("Бронювання підтверджено.")
+
+    def cancel(self):
+        self.status = BookingStatus.CANCELED
+        self._release_seat()
+        print("Бронювання скасовано.")
+
+    def _release_seat(self):
+        if self._holds_seat:
+            self.tour.release()
+            self._holds_seat = False
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        elapsed = time.monotonic() - self._started_at
+        if exc_type is not None:
+            print(f"Помилка під час бронювання: {exc_val}. Місце звільнено.")
+            self.status = BookingStatus.CANCELED
+            self._release_seat()
+        elif elapsed > self.timeout:
+            print(f"Час вичерпано: {elapsed:.1f} с > {self.timeout} с. Місце звільнено.")
+            self.status = BookingStatus.EXPIRED
+            self._release_seat()
+        elif self.status is BookingStatus.PENDING:
+            self.status = BookingStatus.CANCELED
+            self._release_seat()
+        print(f"Фінальний статус: {self.status.value}")
+        print("--- Завершення бронювання ---")
+        return False
+
+    def __str__(self):
+        return f"{self.customer.name} | {self.tour.title} | {self.status.value}"
+
+    def __repr__(self):
+        return (f"Booking(customer={self.customer!r}, tour={self.tour.title!r}, "
+                f"status={self.status.name})")
+
+
+class AvailableTourIterator:
+    def __init__(self, tours):
+        self._queue = sorted((tour for tour in tours if tour.is_available),
+                             key=lambda tour: tour.total_price)
+        self._index = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._index >= len(self._queue):
+            raise StopIteration
+        tour = self._queue[self._index]
+        self._index += 1
+        return tour
+
+
+class TourManager:
+    SORT_KEYS = {
+        "price": lambda tour: tour.total_price,
+        "date": lambda tour: tour.start_date,
+    }
+
+    def __init__(self):
+        self._tours = []
+        self._bookings = []
+
+    @property
+    def tours(self):
+        return tuple(self._tours)
+
+    def add_tour(self, tour):
+        if not isinstance(tour, Tour):
+            raise TypeError("Можна додавати лише об'єкти Tour.")
+        self._tours.append(tour)
+
+    def add_booking(self, booking):
+        self._bookings.append(booking)
+
+    def __len__(self):
+        return len(self._tours)
+
+    def __iter__(self):
+        return AvailableTourIterator(self._tours)
+
+    def __repr__(self):
+        return f"TourManager(tours={len(self._tours)}, bookings={len(self._bookings)})"
+
+    def tour_at(self, number):
+        if not 1 <= number <= len(self._tours):
+            raise ValueError("Туру з таким номером немає.")
+        return self._tours[number - 1]
+
+    def find(self, keyword):
+        keyword = keyword.strip().lower()
+        return [tour for tour in self._tours
+                if keyword in tour.title.lower() or keyword in tour.tour_type.value.lower()]
+
+    def sorted_by(self, criterion):
+        if criterion not in self.SORT_KEYS:
+            raise ValueError("Сортувати можна лише за ціною або датою.")
+        return sorted(self._tours, key=self.SORT_KEYS[criterion])
+
+    def by_direction(self, direction):
+        direction = direction.strip().lower()
+        for tour in self._tours:
+            if direction in tour.direction.lower():
+                yield tour
+
+    def within_budget(self, max_price):
+        for tour in self._tours:
+            if tour.total_price <= max_price:
+                yield tour
+
+    def in_period(self, start, end):
+        if start > end:
+            raise ValueError("Початок періоду пізніше за його кінець.")
+        for tour in self._tours:
+            if start <= tour.start_date <= end:
+                yield tour
+
+    def direction_statistics(self):
+        stats = {tour.direction: [0, 0, 0.0] for tour in self._tours}
+        for booking in self._bookings:
+            row = stats[booking.tour.direction]
+            row[0] += 1
+            if booking.status is BookingStatus.CONFIRMED:
+                row[1] += 1
+                row[2] += booking.tour.total_price
+        rows = [(direction, *values) for direction, values in stats.items()]
+        return sorted(rows, key=lambda row: (-row[2], -row[1], row[0]))
+
+    def export_statistics(self, filename):
+        rows = self.direction_statistics()
+        with open(filename, "w", newline="", encoding="utf-8-sig") as file:
+            writer = csv.writer(file)
+            writer.writerow(STATS_HEADER)
+            for direction, requests, confirmed, revenue in rows:
+                writer.writerow((direction, requests, confirmed, f"{revenue:.2f}"))
+        return rows
+
+    def show_all(self):
+        print("\n--- Усі тури ---")
+        for number, tour in enumerate(self._tours, start=1):
+            print(f"{number}. {tour} | вільних місць: {tour.free_seats}")
+
+    def show_bookings(self):
+        print("\n--- Бронювання ---")
+        if not self._bookings:
+            print("Бронювань ще немає.")
+        for number, booking in enumerate(self._bookings, start=1):
+            print(f"{number}. {booking}")
+
+
+def days_from_now(days):
+    return date.today() + timedelta(days=days)
+
+
+def create_sample_tours():
+    return [
+        BeachTour("Відпочинок в Анталії", 20000, 7, True, "Туреччина", days_from_now(20)),
+        BeachTour("Хургада економ", 18000, 7, False, "Єгипет", days_from_now(35)),
+        ExcursionTour("Древній Рим", 15000, 5, 4, "Італія", days_from_now(50)),
+        ExcursionTour("Мальовнича Прага", 12000, 4, 3, "Чехія", days_from_now(65)),
+        AdventureTour("Карпатський трекінг", 8000, 4, 3, "Україна", days_from_now(12),
+                      seats=1),
+        AdventureTour("Сплав по Дністру", 6000, 3, 2, "Україна", days_from_now(28)),
+    ]
+
+
+def read_int(prompt):
+    try:
+        return int(input(prompt))
+    except ValueError:
+        raise ValueError("Введіть ціле число.")
+
+
+def read_float(prompt):
+    try:
+        return float(input(prompt))
+    except ValueError:
+        raise ValueError("Введіть число.")
+
+
+def read_date(prompt):
+    try:
+        return datetime.strptime(input(prompt), "%d.%m.%Y").date()
+    except ValueError:
+        raise ValueError("Введіть дату у форматі ДД.ММ.РРРР.")
+
+
+def read_customer():
+    name = input("Ім'я клієнта: ")
+    email = input("Email: ")
+    phone = input("Телефон: ")
+    return Customer(name, email, phone)
+
+
+def read_two_tours(manager):
+    manager.show_all()
+    first = manager.tour_at(read_int("\nНомер першого туру: "))
+    second = manager.tour_at(read_int("Номер другого туру: "))
+    return first, second
+
+
+def create_tour():
+    print("\nТипи турів:")
+    print("1 - Пляжний")
+    print("2 - Екскурсійний")
+    print("3 - Пригодницький")
+
+    choice = input("Оберіть тип туру: ")
+    if choice not in ("1", "2", "3"):
+        raise ValueError("Некоректний тип туру.")
+
+    title = input("Назва туру: ")
+    price = read_float("Ціна: ")
+    duration = read_int("Тривалість (днів): ")
+    direction = input("Напрямок (країна): ")
+    start_date = read_date("Дата початку (ДД.ММ.РРРР): ")
+
+    if choice == "1":
+        all_inclusive = input("Все включено? (так/ні): ").lower() == "так"
+        return BeachTour(title, price, duration, all_inclusive, direction, start_date)
+    if choice == "2":
+        excursions = read_int("Кількість екскурсій: ")
+        return ExcursionTour(title, price, duration, excursions, direction, start_date)
+    difficulty = read_int("Складність (1-5): ")
+    return AdventureTour(title, price, duration, difficulty, direction, start_date)
+
+
+def show_tours_action(manager):
+    manager.show_all()
+
+
+def book_tour_action(manager):
+    manager.show_all()
+    tour = manager.tour_at(read_int("\nНомер туру: "))
+    customer = read_customer()
+
+    with Booking(customer, tour) as booking:
+        answer = input("Підтвердити бронювання? (так/ні): ").lower()
+
+        if answer == "так":
+            booking.confirm()
+        else:
+            booking.cancel()
+
+    manager.add_booking(booking)
+
+
+def search_action(manager):
+    keyword = input("Назва або тип туру: ")
+    found = manager.find(keyword)
+
+    if not found:
+        print("Нічого не знайдено.")
+    for tour in found:
+        print(tour)
+
+
+def show_bookings_action(manager):
+    manager.show_bookings()
+
+
+def crash_test_action(manager):
+    tour = create_tour()
+    manager.add_tour(tour)
+    print("\nТур створено і додано до списку:", tour)
+
+
+def polymorphism_action(manager):
+    price = read_float("Базова ціна (грн): ")
+    start = days_from_now(30)
+    samples = [
+        BeachTour("Приклад пляжного", price, 5, True, "Туреччина", start),
+        ExcursionTour("Приклад екскурсійного", price, 5, 2, "Італія", start),
+        AdventureTour("Приклад пригодницького", price, 5, 4, "Україна", start),
+    ]
+
+    print(f"\nБазова ціна однакова: {price:.2f} грн. Метод calculate_final_price():")
+    for tour in samples:
+        print(f"{tour.tour_type.value}: {tour.calculate_final_price():.2f} грн")
+    print("(пляжний — все включено, екскурсійний — 2 екскурсії, пригодницький — складність 4)")
+
+
+def architecture_action(manager):
+    print("\n--- Наслідування (IS-A) ---")
+    for cls in (BeachTour, ExcursionTour, AdventureTour):
+        print(f"{cls.__name__} наслідує {cls.__bases__[0].__name__}: {issubclass(cls, Tour)}")
+
+    print("\n--- Композиція (HAS-A) ---")
+    print(f"TourManager містить список із {len(manager)} об'єктів Tour:")
+    for tour in manager.tours:
+        print(f"- {tour.title}: клас {type(tour).__name__}, "
+              f"є Tour: {isinstance(tour, Tour)}")
+
+
+def available_tours_action(manager):
+    print("\n--- Доступні для бронювання (від найдешевших) ---")
+    shown = 0
+    for tour in manager:
+        shown += 1
+        print(f"{shown}. {tour} | вільних місць: {tour.free_seats}")
+    if not shown:
+        print("Доступних турів немає.")
+
+
+def filter_action(manager):
+    print("\n1 - За напрямком")
+    print("2 - За бюджетом")
+    print("3 - За періодом")
+    choice = input("Оберіть фільтр: ")
+
+    if choice == "1":
+        tours = manager.by_direction(input("Напрямок: "))
+    elif choice == "2":
+        tours = manager.within_budget(read_float("Максимальна ціна (грн): "))
+    elif choice == "3":
+        start = read_date("Початок періоду (ДД.ММ.РРРР): ")
+        tours = manager.in_period(start, read_date("Кінець періоду (ДД.ММ.РРРР): "))
+    else:
+        raise ValueError("Некоректний фільтр.")
+
+    shown = 0
+    for tour in tours:
+        shown += 1
+        print(f"{shown}. {tour}")
+    if not shown:
+        print("Нічого не знайдено.")
+
+
+def compare_action(manager):
+    first, second = read_two_tours(manager)
+
+    print(f"\nЦіна: {first.total_price:.2f} грн проти {second.total_price:.2f} грн")
+    print(f"first < second: {first < second}")
+    print(f"first > second: {first > second}")
+    print(f"first == second: {first == second}")
+
+    earlier = first if first.start_date <= second.start_date else second
+    print(f"Раніше починається: {earlier.title} ({earlier.start_date:%d.%m.%Y})")
+
+    for criterion, label in (("price", "ціною"), ("date", "датою початку")):
+        print(f"\nТури за {label}:")
+        for tour in manager.sorted_by(criterion):
+            print(f"- {tour.title}: {tour.total_price:.2f} грн, {tour.start_date:%d.%m.%Y}")
+
+
+def add_action(manager):
+    first, second = read_two_tours(manager)
+    fee = read_float("Сервісний збір (грн): ")
+
+    print(f"\nTour + Tour: {first.total_price:.2f} + {second.total_price:.2f} = "
+          f"{first + second:.2f} грн")
+
+    with_fee = first + fee
+    print(f"Tour + число: {with_fee.total_price:.2f} грн "
+          f"(збір {with_fee.service_fee:.2f} грн)")
+    print(f"Оригінал не змінено: {first.total_price:.2f} грн, "
+          f"це той самий об'єкт: {with_fee is first}")
+
+    try:
+        first + "збір"
+    except TypeError as e:
+        print("Помилка:", e)
+
+
+def str_repr_action(manager):
+    tour = manager.tour_at(1)
+    customer = Customer("Іван Петренко", "ivan@example.com", "+380501234567")
+    print("\nprint(tour):")
+    print(tour)
+    print("\nrepr(tour):")
+    print(repr(tour))
+    print("\nprint([tour, customer]):")
+    print([tour, customer])
+    print("\nrepr(manager):")
+    print(repr(manager))
+
+
+def timeout_action(manager):
+    manager.show_all()
+    tour = manager.tour_at(read_int("\nНомер туру: "))
+    customer = read_customer()
+
+    with Booking(customer, tour, timeout=1) as booking:
+        booking.confirm()
+        print("Клієнт довго оплачує (пауза 2 с)...")
+        time.sleep(2)
+
+    manager.add_booking(booking)
+    print(f"Вільних місць після бронювання: {tour.free_seats}")
+
+
+def failure_action(manager):
+    manager.show_all()
+    tour = manager.tour_at(read_int("\nНомер туру: "))
+    customer = read_customer()
+    print(f"Вільних місць до бронювання: {tour.free_seats}")
+
+    try:
+        with Booking(customer, tour) as booking:
+            booking.confirm()
+            raise RuntimeError("Збій платіжної системи")
+    except RuntimeError as e:
+        print("Помилку перехоплено ззовні:", e)
+
+    manager.add_booking(booking)
+    print(f"Вільних місць після збою: {tour.free_seats}")
+
+
+def statistics_action(manager):
+    manager.export_statistics(STATS_FILE)
+    print(f"\nСтатистику популярності напрямків збережено у {STATS_FILE}:")
+    with open(STATS_FILE, newline="", encoding="utf-8-sig") as file:
+        for row in csv.reader(file):
+            print(" | ".join(row))
+
+
+MENU = {
+    "1": ("Показати тури", show_tours_action),
+    "2": ("Забронювати тур", book_tour_action),
+    "3": ("Пошук туру", search_action),
+    "4": ("Показати бронювання", show_bookings_action),
+    "5": ("Краш-тест (створити тур вручну)", crash_test_action),
+    "6": ("Поліморфізм (порахувати вартість)", polymorphism_action),
+    "7": ("Наслідування і композиція", architecture_action),
+    "8": ("Доступні тури (ітератор, від найдешевших)", available_tours_action),
+    "9": ("Фільтр турів (генератори)", filter_action),
+    "10": ("Порівняння турів (==, <, >)", compare_action),
+    "11": ("Додавання (__add__)", add_action),
+    "12": ("__str__ та __repr__", str_repr_action),
+    "13": ("Time-Out бронювання", timeout_action),
+    "14": ("Збій усередині with", failure_action),
+    "15": ("CSV-статистика напрямків", statistics_action),
+}
+
+
+def print_menu():
+    line = "=" * 44
+    print(f"\n{line}")
+    print(" СИСТЕМА ТУРИСТИЧНОГО АГЕНТСТВА")
+    print(line)
+    for key, (label, _) in MENU.items():
+        print(f"{key} - {label}")
+    print("0 - Вихід")
+    print(line)
+
+
+def main():
+    manager = TourManager()
+    for tour in create_sample_tours():
+        manager.add_tour(tour)
+
+    while True:
+        print_menu()
+        choice = input("Ваш вибір: ")
+
+        if choice == "0":
+            print("До побачення!")
+            break
+        if choice not in MENU:
+            print("Невідомий пункт меню.")
+            continue
+
+        try:
+            MENU[choice][1](manager)
+        except ValueError as e:
+            print("\nПомилка:", e)
+
+
+if __name__ == "__main__":
+    main()
